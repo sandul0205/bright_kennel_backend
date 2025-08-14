@@ -14,18 +14,24 @@ app.use(bodyParser.json());
 
 const SECRET_KEY = '857637332672adc8cb9cded91354601b64ed97f29f2e135ba079cb18fdada3e968921889772edd28c7be862359d74dcbbd27b7388623a671cec7545f3b9796c41be393e040f50caf9400211929a6183c1a2335214753df8ac346600cdae9de5523d48ef872e4e1317901cf8eef3aba68ae98e3e91a9598881a10a7c3381149c4dd67ab6a89c2fbccf63ec13f7df6a237ae33fad98a8f6b73bc632b2c3ae5a7ceb3d4835da0cf113886b8949254ca61f6ac541badd2ead9fc16647936cfb9ea62ab8c1f4e6cded44c429eb201292f9b3056c3ff89cb3c664350ea8ecd6f6095035fb1a2ca0a99af75d740a6528168773d4ae601cc12098406b21f9850a456b889';
 const BASE_URL   = 'https://bright-kennel-backend.onrender.com';
+
+const express = require('express');
+const app = express();               // <-- add this line
+
+// middlewares
 app.use(cors({
-  origin: true,                 // reflect request origin
+  origin: true,
   methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type','Authorization'],
   credentials: true
 }));
-
-// Make sure preflight OPTIONS doesn’t 404
 app.options('*', cors());
 
-// parse JSON
+// body parsing (pick ONE of these; express.json is enough)
 app.use(express.json());
+// app.use(bodyParser.json());
+
+
 // MySQL Pool
 // const pool = mysql.createPool({
 //   connectionLimit: 10,

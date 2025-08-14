@@ -37,7 +37,7 @@ app.use(express.json());
 // pool.on('error', err => console.error('MySQL pool error:', err.code));
 
 const pool = mysql.createPool({
-  host: ' brightkennel.online',   // local end of the tunnel
+  host: '162.0.235.87',   // local end of the tunnel
   port: 3307,          // the -L port you set
   user: 'brigbnel_sandul0205',          // your cPanel-prefixed MySQL user
   password: 'mishubaba@0205',     // that user's password

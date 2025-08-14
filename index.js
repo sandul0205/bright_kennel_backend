@@ -979,8 +979,4 @@ app.get('/admin/sales', (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on port ${PORT}`);
-<<<<<<< HEAD
 });
-=======
-});
->>>>>>> 3a564f4 (Add dotenv + backend fixes)

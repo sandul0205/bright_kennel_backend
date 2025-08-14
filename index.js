@@ -27,24 +27,24 @@ app.options('*', cors());
 // parse JSON
 app.use(express.json());
 // MySQL Pool
-const pool = mysql.createPool({
-  connectionLimit: 10,
-  host:            'localhost',
-  user:            'root',
-  password:        '',
-  database:        'golden_kennel'
-});
-pool.on('error', err => console.error('MySQL pool error:', err.code));
-
 // const pool = mysql.createPool({
-//   host: '127.0.0.1',   // local end of the tunnel
-//   port: 3307,          // the -L port you set
-//   user: 'brigbnel_sandul0205',          // your cPanel-prefixed MySQL user
-//   password: 'mishubaba@0205',     // that user's password
-//   database: 'brigbnel_bright_kennel',
-//   waitForConnections: true,
 //   connectionLimit: 10,
+//   host:            'localhost',
+//   user:            'root',
+//   password:        '',
+//   database:        'golden_kennel'
 // });
+// pool.on('error', err => console.error('MySQL pool error:', err.code));
+
+const pool = mysql.createPool({
+  host: '127.0.0.1',   // local end of the tunnel
+  port: 3307,          // the -L port you set
+  user: 'brigbnel_sandul0205',          // your cPanel-prefixed MySQL user
+  password: 'mishubaba@0205',     // that user's password
+  database: 'brigbnel_bright_kennel',
+  waitForConnections: true,
+  connectionLimit: 10,
+});
 
 // // quick startup test
 // pool.query('SELECT 1', (err) => {

@@ -88,26 +88,36 @@ app.post('/upload_product_image', upload.single('image'), (req, res) => {
 });
 
 
-// PUBLIC — login
 app.post('/login', (req, res) => {
-  const { email, password } = req.body;
-  if (!email || !password) return res.status(400).json({ success:false, message:'Email and password required' });
+  const { email, password } = req.body || {};
+  
+  if (!email || !password) {
+    return res.status(400).json({ success: false, message: 'Email and password required' });
+  }
 
-  pool.query('SELECT * FROM pet WHERE email=?', [email], (err, rows) => {
-    if (err) return res.status(500).json({ success:false, message:'Server error' });
-    if (!rows.length) return res.status(401).json({ success:false, message:'Invalid credentials' });
+  pool.query('SELECT * FROM users WHERE email = ? LIMIT 1', [email], (err, results) => {
+    if (err) return res.status(500).json({ success: false, message: 'Database error' });
+    if (results.length === 0) {
+      return res.status(401).json({ success: false, message: 'Invalid credentials' });
+    }
 
-    const user = rows[0];
-    bcrypt.compare(password, user.password, (hashErr, isMatch) => {
-      if (hashErr) return res.status(500).json({ success:false, message:'Authentication error' });
-      if (!isMatch) return res.status(401).json({ success:false, message:'Invalid credentials' });
+    const user = results[0];
 
-      const token = jwt.sign({ petId: user.petId }, SECRET_KEY, { expiresIn: 86400 });
-      const { password: _, ...petWithoutPassword } = user;
-      res.json({ success:true, pet:petWithoutPassword, token });
+    // 🚫 No bcrypt — plain text check
+    if (password !== user.password) {
+      return res.status(401).json({ success: false, message: 'Invalid credentials' });
+    }
+
+    // Success — return token & pet data
+    const token = 'SECRET_KEY'; // Replace with real JWT later
+    res.json({
+      success: true,
+      token,
+      pet: { petId: user.pet_id ?? 1 }
     });
   });
 });
+
 
 // PUBLIC — signup
 app.post('/signup', (req, res) => {

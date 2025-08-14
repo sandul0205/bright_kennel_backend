@@ -90,33 +90,53 @@ app.post('/upload_product_image', upload.single('image'), (req, res) => {
 
 app.post('/login', (req, res) => {
   const { email, password } = req.body || {};
-  
   if (!email || !password) {
     return res.status(400).json({ success: false, message: 'Email and password required' });
   }
 
-  pool.query('SELECT * FROM users WHERE email = ? LIMIT 1', [email], (err, results) => {
-    if (err) return res.status(500).json({ success: false, message: 'Database error' });
+  // 🔁 use the actual table you keep logins in
+  pool.query('SELECT petId, email, password FROM pet WHERE email = ? LIMIT 1', [email], (err, results) => {
+    if (err) {
+      console.error('Login DB error:', err);
+      return res.status(500).json({ success: false, message: 'Server error' });
+    }
     if (results.length === 0) {
       return res.status(401).json({ success: false, message: 'Invalid credentials' });
     }
 
     const user = results[0];
+    const stored = user.password || '';
 
-    // 🚫 No bcrypt — plain text check
-    if (password !== user.password) {
-      return res.status(401).json({ success: false, message: 'Invalid credentials' });
+    // If password looks like a bcrypt hash, use bcrypt; else compare plaintext.
+    const finishLogin = (isMatch) => {
+      if (!isMatch) return res.status(401).json({ success: false, message: 'Invalid credentials' });
+
+      // ✅ issue a real JWT (you already have SECRET_KEY)
+      const token = jwt.sign({ petId: user.petId }, SECRET_KEY, { expiresIn: '7d' });
+
+      return res.json({
+        success: true,
+        token,
+        pet: { petId: user.petId }
+      });
+    };
+
+    if (stored.startsWith('$2a$') || stored.startsWith('$2b$') || stored.startsWith('$2y$')) {
+      // bcrypt hash
+      bcrypt.compare(password, stored, (cmpErr, isMatch) => {
+        if (cmpErr) {
+          console.error('bcrypt compare error:', cmpErr);
+          return res.status(500).json({ success: false, message: 'Server error' });
+        }
+        finishLogin(isMatch);
+      });
+    } else {
+      // plaintext
+      finishLogin(password === stored);
     }
-
-    // Success — return token & pet data
-    const token = 'SECRET_KEY'; // Replace with real JWT later
-    res.json({
-      success: true,
-      token,
-      pet: { petId: user.pet_id ?? 1 }
-    });
   });
 });
+
 
 
 // PUBLIC — signup

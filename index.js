@@ -43,14 +43,17 @@ app.use(express.json());
 // pool.on('error', err => console.error('MySQL pool error:', err.code));
 
 const pool = mysql.createPool({
-  host: '162.0.235.87',   // local end of the tunnel
-  port: 3307,          // the -L port you set
-  user: 'brigbnel_sandul0205',          // your cPanel-prefixed MySQL user
-  password: 'mishubaba@0205',     // that user's password
-  database: 'brigbnel_bright_kennel',
+  host: process.env.DB_HOST,              // e.g. server###.your-host.com or the server IP
+  port: Number(process.env.DB_PORT || 3306),
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  database: process.env.DB_NAME,
   waitForConnections: true,
   connectionLimit: 10,
+  // If your host requires SSL, uncomment and set DB_CA in Render:
+  // ssl: { rejectUnauthorized: true, ca: process.env.DB_CA?.replace(/\\n/g, '\n') },
 });
+pool.on('error', e => console.error('MySQL pool error:', e.code || e));
 
 // // quick startup test
 // pool.query('SELECT 1', (err) => {

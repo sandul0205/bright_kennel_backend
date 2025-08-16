@@ -5,52 +5,88 @@ require('dotenv').config();
 const express  = require('express');
 const app      = express();
 
-const mysql    = require('mysql');          // or switch to mysql2 if you prefer
+const mysql    = require('mysql');          // consider mysql2 for prod
 const cors     = require('cors');
 const jwt      = require('jsonwebtoken');
 const multer   = require('multer');
 const path     = require('path');
 const fs       = require('fs');
-const bcrypt   = require('bcryptjs');       // works well on Render/Node 22
+const bcrypt   = require('bcryptjs');
 
 // ---------- Config ----------
+app.set('trust proxy', 1); // respect x-forwarded-* on Render
 const SECRET_KEY = process.env.JWT_SECRET || '857637332672adc8cb9cded91354601b64ed97f29f2e135ba079cb18fdada3e968921889772edd28c7be862359d74dcbbd27b7388623a671cec7545f3b9796c41be393e040f50caf9400211929a6183c1a2335214753df8ac346600cdae9de5523d48ef872e4e1317901cf8eef3aba68ae98e3e91a9598881a10a7c3381149c4dd67ab6a89c2fbccf63ec13f7df6a237ae33fad98a8f6b73bc632b2c3ae5a7ceb3d4835da0cf113886b8949254ca61f6ac541badd2ead9fc16647936cfb9ea62ab8c1f4e6cded44c429eb201292f9b3056c3ff89cb3c664350ea8ecd6f6095035fb1a2ca0a99af75d740a6528168773d4ae601cc12098406b21f9850a456b889';
-const BASE_URL   = process.env.BASE_URL || 'https://bright-kennel-backend-1.onrender.com';
 
+// Build absolute URLs safely from the request (no hard-coded BASE_URL in routes)
+function absoluteUrl(req, pathname) {
+  const proto = (req.headers['x-forwarded-proto'] || req.protocol || 'http').split(',')[0].trim();
+  const host  = (req.headers['x-forwarded-host']  || req.get('host') || '').split(',')[0].trim();
+  const p     = pathname.startsWith('/') ? pathname : `/${pathname}`;
+  return host ? `${proto}://${host}${p}` : p; // fallback to relative if host missing
+}
 
+// Extract uploaded filename from a stored URL (handles absolute or relative)
+function fileNameFromUploadUrl(u) {
+  try {
+    const url = new URL(u);
+    return url.pathname.split('/uploads/')[1] || null;
+  } catch {
+    return u && u.includes('/uploads/') ? u.split('/uploads/')[1] : null;
+  }
+}
 
 // CORS & JSON
 app.use(cors({
-  origin: ['http://localhost:53176', 'https://brightkennel.online', 'https://api.brightkennel.online'],
+  origin: (origin, cb) => {
+    if (!origin) return cb(null, true); // non-browser tools
+    try {
+      const u = new URL(origin);
+      const allow =
+        (u.protocol === 'http:' &&
+         (u.hostname === 'localhost' || u.hostname === '127.0.0.1')) ||
+        u.hostname.endsWith('onrender.com');
+      cb(null, allow);
+    } catch {
+      cb(null, true);
+    }
+  },
   methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
   allowedHeaders: ['Content-Type','Authorization'],
-  credentials: true
+  credentials: true,
+  optionsSuccessStatus: 204
 }));
-app.options('*', cors());
-app.use(express.json());
+
+// Preflight terminator
+app.use((req, res, next) => {
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
+
+
+app.use(express.json({ limit: '10mb' }));
 
 // Static
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-// Health/DB ping
-app.get('/health', (req, res) => res.status(200).send('ok'));
+// Root & health
+app.get('/', (_req, res) => res.status(200).send('OK'));
+app.get('/health', (_req, res) => res.status(200).send('ok'));
 
 // ---------- MySQL Pool ----------
 const pool = mysql.createPool({
-  host: process.env.DB_HOST,               // e.g. Namecheap host/IP
+  host: process.env.DB_HOST,
   port: Number(process.env.DB_PORT || 3306),
   user: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
   database: process.env.DB_NAME,
   waitForConnections: true,
   connectionLimit: 10,
-  // If your host requires SSL:
   // ssl: { rejectUnauthorized: true, ca: process.env.DB_CA?.replace(/\\n/g, '\n') },
 });
 pool.on('error', e => console.error('MySQL pool error:', e.code || e));
 
 // Optional: DB ping route
-app.get('/dbping', (req, res) => {
+app.get('/dbping', (_req, res) => {
   pool.query('SELECT 1 AS ok', (err) => {
     if (err) return res.status(500).json({ ok:false, error:String(err.code||err.message) });
     res.json({ ok:true });
@@ -71,14 +107,14 @@ function verifyToken(req, res, next) {
 
 // ---------- Multer (uploads) ----------
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
+  destination: (_req, _file, cb) => {
     const dir = path.join(__dirname, 'uploads');
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     cb(null, dir);
   },
   filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname);
-    const owner = req.petId || 'anon';     // safe fallback if not authenticated
+    const ext = path.extname(file.originalname) || '';
+    const owner = req.petId || 'anon';
     cb(null, `${owner}-${Date.now()}${ext}`);
   }
 });
@@ -89,7 +125,7 @@ const upload = multer({ storage });
 // PUBLIC — upload product image
 app.post('/upload_product_image', upload.single('image'), (req, res) => {
   if (!req.file) return res.status(400).json({ success:false, message:'No file received' });
-  const url = `${BASE_URL}/uploads/${req.file.filename}`;
+  const url = absoluteUrl(req, `/uploads/${req.file.filename}`);
   res.json({ success:true, url });
 });
 
@@ -99,31 +135,21 @@ app.post('/login', (req, res) => {
   if (!email || !password) {
     return res.status(400).json({ success: false, message: 'Email and password required' });
   }
-
   pool.query('SELECT petId, email, password FROM pet WHERE email = ? LIMIT 1', [email], (err, results) => {
-    if (err) {
-      console.error('Login DB error:', err);
-      return res.status(500).json({ success: false, message: 'Server error' });
-    }
-    if (results.length === 0) {
-      return res.status(401).json({ success: false, message: 'Invalid credentials' });
-    }
+    if (err) { console.error('Login DB error:', err); return res.status(500).json({ success: false, message: 'Server error' }); }
+    if (results.length === 0) return res.status(401).json({ success: false, message: 'Invalid credentials' });
 
     const user   = results[0];
     const stored = user.password || '';
-
     const finishLogin = (isMatch) => {
       if (!isMatch) return res.status(401).json({ success: false, message: 'Invalid credentials' });
       const token = jwt.sign({ petId: user.petId }, SECRET_KEY, { expiresIn: '7d' });
       return res.json({ success: true, token, pet: { petId: user.petId } });
     };
 
-    if (stored.startsWith('$2a$') || stored.startsWith('$2b$') || stored.startsWith('$2y$')) {
+    if (/^\$2[aby]\$/.test(stored)) {
       bcrypt.compare(password, stored, (cmpErr, isMatch) => {
-        if (cmpErr) {
-          console.error('bcrypt compare error:', cmpErr);
-          return res.status(500).json({ success: false, message: 'Server error' });
-        }
+        if (cmpErr) { console.error('bcrypt compare error:', cmpErr); return res.status(500).json({ success: false, message: 'Server error' }); }
         finishLogin(isMatch);
       });
     } else {
@@ -156,7 +182,6 @@ app.post('/signup', (req, res) => {
 app.post('/pet_data', verifyToken, (req, res) => {
   const { petId } = req.body;
   if (petId != req.petId) return res.status(403).send({ success:false, message:'Access denied' });
-
   pool.query('SELECT * FROM pet WHERE petId=?', [petId], (err, rows) => {
     if (err) return res.status(500).send({ success:false, message:'Server error' });
     if (!rows.length) return res.status(404).send({ success:false, message:'Pet not found' });
@@ -204,7 +229,7 @@ app.post('/update_pet', verifyToken, (req, res) => {
   }
 });
 
-// PROTECTED — update pet password (plaintext compare)
+// PROTECTED — update pet password (supports hashed or plaintext old; stores hashed new)
 app.post('/update_pet_password', verifyToken, (req, res) => {
   const { petId, currentPassword, newPassword } = req.body;
   if (petId != req.petId) return res.status(403).send({ success:false, message:'Access denied' });
@@ -212,14 +237,29 @@ app.post('/update_pet_password', verifyToken, (req, res) => {
   pool.query('SELECT password FROM pet WHERE petId=?', [petId], (err, results) => {
     if (err) return res.status(500).send({ success:false, message:'Server error' });
     if (!results.length) return res.send({ success:false, message:'Pet not found' });
-    if (results[0].password !== currentPassword) return res.send({ success:false, message:'Current password is incorrect' });
 
-    pool.query('UPDATE pet SET password=? WHERE petId=?', [newPassword, petId], (err2, res2) => {
-      if (err2) return res.status(500).send({ success:false, message:'Server error' });
-      if (!res2.affectedRows) return res.send({ success:false, message:'Pet not found' });
-      pool.query('INSERT INTO notifications (petId,message) VALUES (?,?)', [petId, 'Your password was changed successfully.'], () => {});
-      res.send({ success:true, message:'Password updated successfully' });
-    });
+    const stored = results[0].password || '';
+    const checkAndUpdate = (match) => {
+      if (!match) return res.send({ success:false, message:'Current password is incorrect' });
+      bcrypt.hash(newPassword, 10, (hashErr, hash) => {
+        if (hashErr) return res.status(500).send({ success:false, message:'Server error' });
+        pool.query('UPDATE pet SET password=? WHERE petId=?', [hash, petId], (err2, res2) => {
+          if (err2) return res.status(500).send({ success:false, message:'Server error' });
+          if (!res2.affectedRows) return res.send({ success:false, message:'Pet not found' });
+          pool.query('INSERT INTO notifications (petId,message) VALUES (?,?)', [petId, 'Your password was changed successfully.'], () => {});
+          res.send({ success:true, message:'Password updated successfully' });
+        });
+      });
+    };
+
+    if (/^\$2[aby]\$/.test(stored)) {
+      bcrypt.compare(currentPassword, stored, (cmpErr, isMatch) => {
+        if (cmpErr) return res.status(500).send({ success:false, message:'Server error' });
+        checkAndUpdate(isMatch);
+      });
+    } else {
+      checkAndUpdate(currentPassword === stored);
+    }
   });
 });
 
@@ -266,12 +306,12 @@ app.post('/update_profile_picture', verifyToken, upload.single('profilePic'), (r
   pool.query('SELECT profilePic FROM pet WHERE petId=?', [petId], (selErr, selRows) => {
     if (selErr) return res.status(500).send({ success:false, message:'Server error' });
 
-    if (selRows[0].profilePic) {
-      const filename = selRows[0].profilePic.replace(`${BASE_URL}/uploads/`, '');
-      fs.unlink(path.join(__dirname,'uploads',filename), ()=>{});
+    if (selRows[0]?.profilePic) {
+      const filename = fileNameFromUploadUrl(selRows[0].profilePic);
+      if (filename) fs.unlink(path.join(__dirname,'uploads',filename), ()=>{});
     }
 
-    const fullUrl = `${BASE_URL}/uploads/${req.file.filename}`;
+    const fullUrl = absoluteUrl(req, `/uploads/${req.file.filename}`);
     pool.query('UPDATE pet SET profilePic=? WHERE petId=?', [fullUrl,petId], (updErr,updRes) => {
       if (updErr) return res.status(500).send({ success:false, message:'Server error' });
       if (!updRes.affectedRows) return res.status(404).send({ success:false, message:'Pet not found' });
@@ -283,7 +323,7 @@ app.post('/update_profile_picture', verifyToken, upload.single('profilePic'), (r
 });
 
 // PUBLIC — products
-app.get('/products', (req, res) => {
+app.get('/products', (_req, res) => {
   pool.query('SELECT * FROM store', (err, rows) => {
     if (err) return res.status(500).send({ success:false, message:'Server error' });
     res.send({ success:true, products: rows });
@@ -509,7 +549,7 @@ app.post('/update_appointment', verifyToken, (req, res) => {
 });
 
 // PUBLIC — pets list
-app.get('/pets', (req, res) => {
+app.get('/pets', (_req, res) => {
   pool.query('SELECT petId,name,type FROM pet', (err, rows) => {
     if (err) return res.status(500).send({ success:false, message:'Server error' });
     res.send({ success:true, pets: rows });
@@ -684,8 +724,8 @@ app.post('/activities', verifyToken, (req, res) => {
   );
 });
 
-// ADMIN — products/appointments/orders/sales (same as your original)
-app.get('/admin/products', (req, res) => {
+// ADMIN — products/appointments/orders/sales
+app.get('/admin/products', (_req, res) => {
   pool.query('SELECT * FROM store', (err, rows) => {
     if (err) return res.status(500).send({ success:false, message:'Server error' });
     res.send({ success:true, products: rows });
@@ -722,10 +762,8 @@ app.put('/admin/products/:id', (req, res) => {
     if (!rows.length) return res.status(404).send({ success:false, message:'Product not found' });
 
     const oldUrl = rows[0].image;
-    if (oldUrl && oldUrl.includes('/uploads/')) {
-      const fn=oldUrl.split('/uploads/')[1];
-      try{ fs.unlinkSync(path.join(__dirname,'uploads',fn)); }catch(e){}
-    }
+    const oldFn  = fileNameFromUploadUrl(oldUrl);
+    if (oldFn) { try { fs.unlinkSync(path.join(__dirname,'uploads',oldFn)); } catch(e) {} }
 
     pool.query(
       'UPDATE store SET name=?,qty=?,price=?,description=?,image=?,discount=?,petType=? WHERE productId=?',
@@ -744,14 +782,12 @@ app.delete('/admin/products/:id', (req, res) => {
     if (!rows.length) return res.status(404).send({ success:false, message:'Product not found' });
 
     const imageUrl = rows[0].image;
-    if (imageUrl && imageUrl.includes('/uploads/')) {
-      const fn=imageUrl.split('/uploads/')[1];
-      try{ fs.unlinkSync(path.join(__dirname,'uploads',fn)); }catch(e){}
-    }
+    const fn = fileNameFromUploadUrl(imageUrl);
+    if (fn) { try { fs.unlinkSync(path.join(__dirname,'uploads',fn)); } catch(e) {} }
 
     pool.query('DELETE FROM orders WHERE product_id=?',[id], () => {
       pool.query('DELETE FROM cart_items WHERE product_id=?',[id], () => {
-        pool.query('DELETE FROM store WHERE productId=?',[id], (delErr,result) => {
+        pool.query('DELETE FROM store WHERE productId=?',[id], (delErr) => {
           if (delErr) return res.status(500).send({ success:false, message:'Server error deleting product' });
           res.send({ success:true, message:'Product and all references removed' });
         });
@@ -769,7 +805,7 @@ app.post('/adminDietplan', (req, res) => {
     res.send({ success:true, message:'Diet plan created', dietId: result.insertId });
   });
 });
-app.get('/admin/appointments', (req, res) => {
+app.get('/admin/appointments', (_req, res) => {
   const sql=`
     SELECT a.appointmentId,a.petId,p.name AS petName,a.service,a.serviceType,
            a.preferred_date,a.preferred_time,a.notes,a.status
